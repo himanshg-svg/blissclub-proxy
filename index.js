@@ -3,10 +3,22 @@ const fetch   = require('node-fetch')
 const cors    = require('cors')
 
 const app    = express()
-const PORT   = process.env.PORT || 3001
+const PORT   = process.env.PORT || 8080
 const APIKEY = process.env.WINDSOR_API_KEY
 
-app.use(cors())
+app.use(cors({
+  origin: [
+    'https://blissclub.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    /\.vercel\.app$/,
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}))
+
+// Also handle preflight
+app.options('*', cors())
 app.use(express.json())
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -118,7 +130,7 @@ app.get('/api/sync-all', async (req, res) => {
 
   await Promise.allSettled(tasks.map(async t => {
     try {
-      const r = await fetch(`http://localhost:${PORT}${t.path}`)
+      const r = await fetch(`http://127.0.0.1:${PORT}${t.path}`)
       const j = await r.json()
       results[t.key] = j.data || []
     } catch (e) {
