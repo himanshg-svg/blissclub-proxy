@@ -1,0 +1,17 @@
+{
+  "name": "blissclub-proxy",
+  "version": "1.0.0",
+  "description": "Windsor API proxy for BlissClub dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

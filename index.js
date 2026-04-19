@@ -1,0 +1,132 @@
+const express = require('express')
+const fetch   = require('node-fetch')
+const cors    = require('cors')
+
+const app    = express()
+const PORT   = process.env.PORT || 3001
+const APIKEY = process.env.WINDSOR_API_KEY
+
+app.use(cors())
+app.use(express.json())
+
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.json({ ok: true, service: 'blissclub-proxy' }))
+
+// ── Generic Windsor fetch helper ─────────────────────────────────────────────
+async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
+  if (!APIKEY) return { error: 'WINDSOR_API_KEY not set' }
+  const params = new URLSearchParams({
+    api_key:     APIKEY,
+    date_preset: datePreset,
+    fields:      fields.join(','),
+  })
+  if (accounts) params.set('select_accounts', accounts)
+  const url = `https://connectors.windsor.ai/all?${params}`
+  const res  = await fetch(url, { timeout: 60000 })
+  if (!res.ok) throw new Error(`Windsor ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+// ── Meta daily (Facebook + GA4 blended) ──────────────────────────────────────
+app.get('/api/meta-daily', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign', 'adset_name', 'ad_name',
+      'spend', 'impressions', 'clicks', 'datasource',
+      'sessions', 'source',
+      'cost_per_action_type_landing_page_view', 'cpc',
+      'purchase_roas_omni_purchase',
+      'session_manual_ad_content', 'session_manual_term',
+      'totalrevenue', 'transactions',
+    ], `facebook__584820145452956,googleanalytics4__344633503`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Google campaigns ──────────────────────────────────────────────────────────
+app.get('/api/google-campaigns', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign_name', 'ad_name',
+      'cost', 'spend', 'impressions', 'clicks',
+      'average_cpm', 'cpc', 'ctr',
+      'conversions', 'conversion_value', 'roas',
+      'sessions', 'ecr',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Google search terms ───────────────────────────────────────────────────────
+app.get('/api/google-search-terms', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'search_term', 'campaign_name', 'ad_group_name',
+      'cost', 'impressions', 'clicks', 'conversions',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Google keywords ───────────────────────────────────────────────────────────
+app.get('/api/google-keywords', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'keyword_text', 'keyword_match_type',
+      'campaign_name', 'ad_group_name',
+      'cost', 'impressions', 'clicks', 'conversions',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Google awareness ──────────────────────────────────────────────────────────
+app.get('/api/google-awareness', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign_name',
+      'cost', 'impressions', 'clicks',
+      'video_views', 'vtr', 'cpv', 'average_cpm',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Sync all (dashboard calls this once to get everything) ────────────────────
+app.get('/api/sync-all', async (req, res) => {
+  const preset = req.query.preset || 'last_30d'
+  const results = {}
+  const errors  = {}
+
+  const tasks = [
+    { key: 'meta',         path: `/api/meta-daily?preset=${preset}` },
+    { key: 'google',       path: `/api/google-campaigns?preset=${preset}` },
+    { key: 'searchTerms',  path: `/api/google-search-terms?preset=${preset}` },
+    { key: 'keywords',     path: `/api/google-keywords?preset=${preset}` },
+    { key: 'awareness',    path: `/api/google-awareness?preset=${preset}` },
+  ]
+
+  await Promise.allSettled(tasks.map(async t => {
+    try {
+      const r = await fetch(`http://localhost:${PORT}${t.path}`)
+      const j = await r.json()
+      results[t.key] = j.data || []
+    } catch (e) {
+      errors[t.key] = e.message
+    }
+  }))
+
+  res.json({ ok: true, results, errors, preset })
+})
+
+app.listen(PORT, () => console.log(`BlissClub proxy running on port ${PORT}`))
