@@ -76,10 +76,9 @@ app.get('/api/google-campaigns', async (req, res) => {
 // ── Google search terms ───────────────────────────────────────────────────────
 app.get('/api/google-search-terms', async (req, res) => {
   try {
-    // Windsor uses 'search_term' as field ID (maps to 'Search Terms' column in output)
     const data = await windsorFetch([
-      'date', 'search_term', 'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
+      'date', 'search_term', 'campaign', 'ad_group_name',
+      'spend', 'impressions', 'clicks', 'conversions', 'conversion_value', 'cpc', 'ctr',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data })
   } catch (e) {
@@ -92,8 +91,8 @@ app.get('/api/google-keywords', async (req, res) => {
   try {
     const data = await windsorFetch([
       'date', 'keyword_text', 'keyword_match_type',
-      'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
+      'campaign', 'ad_group_name',
+      'spend', 'impressions', 'clicks', 'conversions', 'conversion_value', 'cpc', 'ctr',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data })
   } catch (e) {
