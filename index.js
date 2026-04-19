@@ -6,18 +6,7 @@ const app    = express()
 const PORT   = process.env.PORT || 8080
 const APIKEY = process.env.WINDSOR_API_KEY
 
-app.use(cors({
-  origin: [
-    'https://blissclub.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:5173',
-    /\.vercel\.app$/,
-  ],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}))
-
-// Also handle preflight
+app.use(cors())
 app.options('*', cors())
 app.use(express.json())
 
@@ -26,7 +15,7 @@ app.get('/', (req, res) => res.json({ ok: true, service: 'blissclub-proxy' }))
 
 // ── Generic Windsor fetch helper ─────────────────────────────────────────────
 async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
-  if (!APIKEY) return { error: 'WINDSOR_API_KEY not set' }
+  if (!APIKEY) return []
   const params = new URLSearchParams({
     api_key:     APIKEY,
     date_preset: datePreset,
@@ -36,7 +25,18 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   const url = `https://connectors.windsor.ai/all?${params}`
   const res  = await fetch(url, { timeout: 60000 })
   if (!res.ok) throw new Error(`Windsor ${res.status}: ${await res.text()}`)
-  return res.json()
+  const json = await res.json()
+  // Windsor wraps response: { data: [...] } or { data: { data: [...] } }
+  if (Array.isArray(json)) return json
+  if (Array.isArray(json.data)) return json.data
+  if (json.data && Array.isArray(json.data.data)) return json.data.data
+  if (typeof json === 'object') {
+    // Try to find any array value
+    for (const val of Object.values(json)) {
+      if (Array.isArray(val)) return val
+    }
+  }
+  return []
 }
 
 // ── Meta daily (Facebook + GA4 blended) ──────────────────────────────────────
