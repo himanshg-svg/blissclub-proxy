@@ -126,7 +126,6 @@ app.get('/api/google-awareness', async (req, res) => {
       'date', 'campaign_name', 'ad_name',
       'cost', 'impressions', 'clicks',
       'video_views', 'vtr', 'cpv', 'average_cpm',
-      'device', 'region', 'city',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data, count: data.length })
   } catch (e) {
