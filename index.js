@@ -76,9 +76,10 @@ app.get('/api/google-campaigns', async (req, res) => {
 // ── Google search terms ───────────────────────────────────────────────────────
 app.get('/api/google-search-terms', async (req, res) => {
   try {
+    // Windsor uses 'search_term' as field ID (maps to 'Search Terms' column in output)
     const data = await windsorFetch([
       'date', 'search_term', 'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions',
+      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data })
   } catch (e) {
@@ -92,8 +93,21 @@ app.get('/api/google-keywords', async (req, res) => {
     const data = await windsorFetch([
       'date', 'keyword_text', 'keyword_match_type',
       'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions',
+      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── GA4 standalone ────────────────────────────────────────────────────────────
+app.get('/api/ga4', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign', 'session_manual_term', 'session_manual_ad_content',
+      'sessions', 'transactions', 'totalrevenue', 'source',
+    ], `googleanalytics4__344633503`, req.query.preset || 'last_30d')
     res.json({ ok: true, data })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
@@ -122,6 +136,7 @@ app.get('/api/sync-all', async (req, res) => {
 
   const tasks = [
     { key: 'meta',         path: `/api/meta-daily?preset=${preset}` },
+    { key: 'ga4',          path: `/api/ga4?preset=${preset}` },
     { key: 'google',       path: `/api/google-campaigns?preset=${preset}` },
     { key: 'searchTerms',  path: `/api/google-search-terms?preset=${preset}` },
     { key: 'keywords',     path: `/api/google-keywords?preset=${preset}` },
