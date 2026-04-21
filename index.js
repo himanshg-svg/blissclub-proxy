@@ -83,8 +83,8 @@ app.get('/api/google-campaigns', async (req, res) => {
 app.get('/api/google-search-terms', async (req, res) => {
   try {
     const data = await windsorFetch([
-      'date', 'search_term', 'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
+      'date', 'search_term', 'campaign', 'ad_group_name',
+      'spend', 'impressions', 'clicks', 'conversions', 'conversion_value', 'cpc', 'ctr',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data, count: data.length })
   } catch (e) {
@@ -97,8 +97,8 @@ app.get('/api/google-keywords', async (req, res) => {
   try {
     const data = await windsorFetch([
       'date', 'keyword_text', 'keyword_match_type',
-      'campaign_name', 'ad_group_name',
-      'cost', 'impressions', 'clicks', 'conversions', 'conversion_value',
+      'campaign', 'ad_group_name',
+      'spend', 'impressions', 'clicks', 'conversions', 'conversion_value', 'cpc', 'ctr',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data, count: data.length })
   } catch (e) {
@@ -147,19 +147,20 @@ app.get('/api/google-products', async (req, res) => {
   }
 })
 
+
 // ── Google Demand Gen (video + static ad level) ──────────────────────────────
 app.get('/api/google-demandgen', async (req, res) => {
   try {
     const data = await windsorFetch([
-      'date', 'campaign_name', 'ad_name',
+      'date', 'campaign', 'ad_name',
       'cost', 'impressions', 'clicks',
       'conversions', 'conversion_value',
-      'average_cpm', 'ctr',
+      'ctr', 'cpc',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
-    // Filter only demand gen campaigns
+    // Filter to demand gen campaigns only (covers both naming conventions)
     const filtered = data.filter(r => {
-      const name = (r.campaign_name || '').toLowerCase()
-      return name.includes('demand') || name.includes('demandgen') || name.includes('demand_gen')
+      const name = (r.campaign || r.campaign_name || '').toLowerCase()
+      return name.includes('demand') || name.includes('demandgen') || name.includes('demand_gen') || name.includes('demand-gen')
     })
     res.json({ ok: true, data: filtered, count: filtered.length })
   } catch (e) {
