@@ -10,11 +10,9 @@ app.use(cors())
 app.options('*', cors())
 app.use(express.json())
 
-// ── Health check + keep-alive ────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ ok: true, service: 'blissclub-proxy', ts: Date.now() }))
 app.get('/ping', (req, res) => res.json({ pong: true, ts: Date.now() }))
 
-// ── Generic Windsor fetch helper ─────────────────────────────────────────────
 async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
   const params = new URLSearchParams({
@@ -24,7 +22,6 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   })
   if (accounts) params.set('select_accounts', accounts)
   const url = `https://connectors.windsor.ai/all?${params}`
-
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 55000)
   try {
@@ -45,18 +42,23 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   }
 }
 
-// ── Meta daily ────────────────────────────────────────────────────────────────
+// ── Meta daily — split into 2 calls to stay under Windsor field limit ─────────
 app.get('/api/meta-daily', async (req, res) => {
   try {
-    const data = await windsorFetch([
+    const preset = req.query.preset || 'last_30d'
+    // Call 1: Meta spend/performance fields
+    const metaData = await windsorFetch([
       'date', 'campaign', 'adset_name', 'ad_name',
       'spend', 'impressions', 'clicks', 'datasource',
-      'sessions', 'source',
-      'cost_per_action_type_landing_page_view', 'cpc',
-      'purchase_roas_omni_purchase',
-      'session_manual_ad_content', 'session_manual_term',
-      'totalrevenue', 'transactions',
-    ], `facebook__584820145452956,googleanalytics4__344633503`, req.query.preset || 'last_30d')
+    ], `facebook__584820145452956`, preset)
+
+    // Call 2: GA4 + revenue fields
+    const ga4Data = await windsorFetch([
+      'date', 'campaign', 'session_manual_term', 'session_manual_ad_content',
+      'sessions', 'totalrevenue', 'transactions', 'datasource', 'source',
+    ], `googleanalytics4__344633503`, preset)
+
+    const data = [...metaData, ...ga4Data]
     res.json({ ok: true, data, count: data.length })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
@@ -68,9 +70,8 @@ app.get('/api/google-campaigns', async (req, res) => {
   try {
     const data = await windsorFetch([
       'date', 'campaign_name', 'ad_name',
-      'cost', 'spend', 'impressions', 'clicks',
-      'average_cpm', 'cpc', 'ctr',
-      'conversions', 'conversion_value', 'roas',
+      'cost', 'impressions', 'clicks',
+      'conversions', 'conversion_value',
     ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
     res.json({ ok: true, data, count: data.length })
   } catch (e) {
@@ -151,7 +152,6 @@ app.get('/api/sync-all', async (req, res) => {
   const preset = req.query.preset || 'last_30d'
   const results = {}
   const errors  = {}
-
   const tasks = [
     { key: 'meta',        path: `/api/meta-daily?preset=${preset}` },
     { key: 'ga4',         path: `/api/ga4?preset=${preset}` },
@@ -161,7 +161,6 @@ app.get('/api/sync-all', async (req, res) => {
     { key: 'awareness',   path: `/api/google-awareness?preset=${preset}` },
     { key: 'products',    path: `/api/google-products?preset=${preset}` },
   ]
-
   await Promise.allSettled(tasks.map(async t => {
     try {
       const r = await fetch(`http://127.0.0.1:${PORT}${t.path}`)
@@ -171,7 +170,6 @@ app.get('/api/sync-all', async (req, res) => {
       errors[t.key] = e.message
     }
   }))
-
   res.json({ ok: true, results, errors, preset })
 })
 
