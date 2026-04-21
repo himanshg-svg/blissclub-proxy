@@ -147,6 +147,26 @@ app.get('/api/google-products', async (req, res) => {
   }
 })
 
+// ── Google Demand Gen (video + static ad level) ──────────────────────────────
+app.get('/api/google-demandgen', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign_name', 'ad_name',
+      'cost', 'impressions', 'clicks',
+      'conversions', 'conversion_value',
+      'average_cpm', 'ctr',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    // Filter only demand gen campaigns
+    const filtered = data.filter(r => {
+      const name = (r.campaign_name || '').toLowerCase()
+      return name.includes('demand') || name.includes('demandgen') || name.includes('demand_gen')
+    })
+    res.json({ ok: true, data: filtered, count: filtered.length })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // ── Sync all ──────────────────────────────────────────────────────────────────
 app.get('/api/sync-all', async (req, res) => {
   const preset = req.query.preset || 'last_30d'
@@ -160,6 +180,7 @@ app.get('/api/sync-all', async (req, res) => {
     { key: 'keywords',    path: `/api/google-keywords?preset=${preset}` },
     { key: 'awareness',   path: `/api/google-awareness?preset=${preset}` },
     { key: 'products',    path: `/api/google-products?preset=${preset}` },
+    { key: 'demandgen',   path: `/api/google-demandgen?preset=${preset}` },
   ]
   await Promise.allSettled(tasks.map(async t => {
     try {
