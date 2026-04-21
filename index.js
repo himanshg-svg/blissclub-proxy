@@ -25,9 +25,8 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   if (accounts) params.set('select_accounts', accounts)
   const url = `https://connectors.windsor.ai/all?${params}`
 
-  // node-fetch v2 uses AbortController for timeout
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 55000) // 55s timeout
+  const timer = setTimeout(() => controller.abort(), 55000)
   try {
     const res = await fetch(url, { signal: controller.signal })
     clearTimeout(timer)
@@ -133,6 +132,20 @@ app.get('/api/google-awareness', async (req, res) => {
   }
 })
 
+// ── Google products (Shopping + PMax) ────────────────────────────────────────
+app.get('/api/google-products', async (req, res) => {
+  try {
+    const data = await windsorFetch([
+      'date', 'campaign_name', 'product_title',
+      'cost', 'impressions', 'clicks',
+      'conversions', 'conversion_value',
+    ], `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    res.json({ ok: true, data, count: data.length })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // ── Sync all ──────────────────────────────────────────────────────────────────
 app.get('/api/sync-all', async (req, res) => {
   const preset = req.query.preset || 'last_30d'
@@ -146,6 +159,7 @@ app.get('/api/sync-all', async (req, res) => {
     { key: 'searchTerms', path: `/api/google-search-terms?preset=${preset}` },
     { key: 'keywords',    path: `/api/google-keywords?preset=${preset}` },
     { key: 'awareness',   path: `/api/google-awareness?preset=${preset}` },
+    { key: 'products',    path: `/api/google-products?preset=${preset}` },
   ]
 
   await Promise.allSettled(tasks.map(async t => {
