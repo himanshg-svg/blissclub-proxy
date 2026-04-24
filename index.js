@@ -21,7 +21,7 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   if (accounts) params.set('select_accounts', accounts)
   const url = `https://connectors.windsor.ai/all?${params}`
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 55000)
+  const timer = setTimeout(() => controller.abort(), 90000)
   try {
     const res = await fetch(url, { signal: controller.signal })
     clearTimeout(timer)
@@ -54,7 +54,9 @@ app.get('/api/meta-daily', async (req, res) => {
     const metaData = await windsorFetch(
       ['date','adset_name','ad_name','spend','impressions','clicks'],
       `facebook__584820145452956`, preset)
-    res.json({ ok: true, data: metaData, count: metaData.length })
+    // Limit to last 3000 rows to keep response fast
+    const trimmed = metaData.slice(-3000)
+    res.json({ ok: true, data: trimmed, count: trimmed.length })
   } catch (e) {
     console.error('meta-daily error:', e.message)
     res.status(500).json({ ok: false, error: e.message })
