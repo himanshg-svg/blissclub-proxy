@@ -50,12 +50,12 @@ app.get('/ping', (req, res) => res.json({ pong: true, ts: Date.now() }))
 app.get('/api/meta-daily', async (req, res) => {
   try {
     const preset = req.query.preset || 'last_30d'
-    const [metaData, ga4Data] = await Promise.all([
-      windsorFetch(['date','campaign','adset_name','ad_name','spend','impressions','clicks','datasource'],
-        `facebook__584820145452956`, preset),
-      windsorFetch(['date','campaign','session_manual_term','session_manual_ad_content','sessions','totalrevenue','transactions','datasource','source'],
-        `googleanalytics4__344633503`, preset),
-    ])
+    const metaData = await windsorFetch(
+      ['date','campaign','adset_name','ad_name','spend','impressions','clicks','datasource'],
+      `facebook__584820145452956`, preset)
+    const ga4Data = await windsorFetch(
+      ['date','campaign','session_manual_term','session_manual_ad_content','sessions','totalrevenue','transactions','datasource','source'],
+      `googleanalytics4__344633503`, preset)
     const data = [...metaData, ...ga4Data]
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
