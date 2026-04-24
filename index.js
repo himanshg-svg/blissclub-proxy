@@ -46,19 +46,32 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
 app.get('/',     (req, res) => res.json({ ok: true, service: 'blissclub-proxy', ts: Date.now() }))
 app.get('/ping', (req, res) => res.json({ pong: true, ts: Date.now() }))
 
-// ── Meta daily ────────────────────────────────────────────────────────────────
+// ── Meta daily — split into 2 separate endpoints to avoid memory spike ────────
 app.get('/api/meta-daily', async (req, res) => {
   try {
     const preset = req.query.preset || 'last_30d'
+    // Only fetch Meta spend fields — keep field count low
     const metaData = await windsorFetch(
-      ['date','campaign','adset_name','ad_name','spend','impressions','clicks','datasource'],
+      ['date','adset_name','ad_name','spend','impressions','clicks'],
       `facebook__584820145452956`, preset)
+    res.json({ ok: true, data: metaData, count: metaData.length })
+  } catch (e) {
+    console.error('meta-daily error:', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/meta-ga4', async (req, res) => {
+  try {
+    const preset = req.query.preset || 'last_30d'
     const ga4Data = await windsorFetch(
-      ['date','campaign','session_manual_term','session_manual_ad_content','sessions','totalrevenue','transactions','datasource','source'],
+      ['date','campaign','session_manual_term','sessions','totalrevenue','transactions'],
       `googleanalytics4__344633503`, preset)
-    const data = [...metaData, ...ga4Data]
-    res.json({ ok: true, data, count: data.length })
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
+    res.json({ ok: true, data: ga4Data, count: ga4Data.length })
+  } catch (e) {
+    console.error('meta-ga4 error:', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
 })
 
 // ── Google campaigns ──────────────────────────────────────────────────────────
@@ -142,6 +155,7 @@ app.get('/api/sync-all', async (req, res) => {
   const results = {}, errors = {}
   const tasks = [
     { key: 'meta',       path: `/api/meta-daily?preset=${preset}` },
+    { key: 'metaGa4',    path: `/api/meta-ga4?preset=${preset}` },
     { key: 'ga4',        path: `/api/ga4?preset=${preset}` },
     { key: 'google',     path: `/api/google-campaigns?preset=${preset}` },
     { key: 'searchTerms',path: `/api/google-search-terms?preset=${preset}` },
