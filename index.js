@@ -10,7 +10,9 @@ app.use(cors())
 app.options('*', cors())
 app.use(express.json())
 
-// ── Memory-efficient Windsor fetch ────────────────────────────────────────────
+const PRESETS = ['last_7d', 'last_14d', 'last_28d', 'last_60d', 'last_90d']
+
+// ── Base Windsor fetch ────────────────────────────────────────────────────────
 async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
   const params = new URLSearchParams({
@@ -26,124 +28,144 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
     const res = await fetch(url, { signal: controller.signal })
     clearTimeout(timer)
     if (!res.ok) throw new Error(`Windsor ${res.status}: ${await res.text()}`)
-    // Stream-parse to avoid loading full response into memory
     const text = await res.text()
     const json = JSON.parse(text)
-    // Free the text string immediately
     if (Array.isArray(json))                        return json
     if (Array.isArray(json.data))                   return json.data
     if (json.data && Array.isArray(json.data.data)) return json.data.data
-    for (const val of Object.values(json)) {
-      if (Array.isArray(val)) return val
-    }
+    for (const val of Object.values(json)) { if (Array.isArray(val)) return val }
     return []
-  } catch (e) {
-    clearTimeout(timer)
-    throw e
+  } catch (e) { clearTimeout(timer); throw e }
+}
+
+// ── Chunked 90-day fetch — fires all presets in parallel, dedupes by key ─────
+async function windsorFetch90(fields, accounts, dedupeKey) {
+  const chunks = await Promise.allSettled(
+    PRESETS.map(p => windsorFetch(fields, accounts, p))
+  )
+  const allRows = []
+  for (const chunk of chunks) {
+    if (chunk.status === 'fulfilled' && Array.isArray(chunk.value)) {
+      allRows.push(...chunk.value)
+    }
   }
+  if (!dedupeKey) return allRows
+  // Deduplicate by composite key
+  const seen = new Map()
+  for (const row of allRows) {
+    const key = dedupeKey(row)
+    seen.set(key, row)
+  }
+  return Array.from(seen.values())
 }
 
 app.get('/',     (req, res) => res.json({ ok: true, service: 'blissclub-proxy', ts: Date.now() }))
 app.get('/ping', (req, res) => res.json({ pong: true, ts: Date.now() }))
 
-// ── Meta daily — split into 2 separate endpoints to avoid memory spike ────────
+// ── Meta daily — 90d chunked ──────────────────────────────────────────────────
 app.get('/api/meta-daily', async (req, res) => {
   try {
-    const preset = req.query.preset || 'last_30d'
-    // Only fetch Meta spend fields — keep field count low
-    const metaData = await windsorFetch(
-      ['date','adset_name','ad_name','spend','impressions','clicks'],
-      `facebook__584820145452956`, preset)
-    // Limit to last 3000 rows to keep response fast
-    const trimmed = metaData.slice(-3000)
-    res.json({ ok: true, data: trimmed, count: trimmed.length })
+    const fields  = ['date','campaign','adset_name','ad_name','spend','impressions','clicks']
+    const account = `facebook__584820145452956`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.ad_name || ''}__${r.adset_name || ''}`)
+    console.log(`Meta daily: ${data.length} rows`)
+    res.json({ ok: true, data, count: data.length })
   } catch (e) {
     console.error('meta-daily error:', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })
 
+// ── Meta GA4 — 90d chunked ────────────────────────────────────────────────────
 app.get('/api/meta-ga4', async (req, res) => {
   try {
-    const preset = req.query.preset || 'last_30d'
-    const ga4Data = await windsorFetch(
-      ['date','campaign','session_manual_term','sessions','totalrevenue','transactions'],
-      `googleanalytics4__344633503`, preset)
-    res.json({ ok: true, data: ga4Data, count: ga4Data.length })
+    const fields  = ['date','campaign','session_manual_term','sessions','totalrevenue','transactions']
+    const account = `googleanalytics4__344633503`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign || ''}__${r.session_manual_term || ''}`)
+    res.json({ ok: true, data, count: data.length })
   } catch (e) {
     console.error('meta-ga4 error:', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })
 
-// ── Google campaigns ──────────────────────────────────────────────────────────
+// ── Google campaigns — 90d chunked ───────────────────────────────────────────
 app.get('/api/google-campaigns', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','campaign_name','ad_name','cost','impressions','clicks','conversions','conversion_value'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    const fields  = ['date','campaign_name','ad_name','cost','impressions','clicks','conversions','conversion_value']
+    const account = `google_ads__858-197-3435`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign_name || ''}__${r.ad_name || ''}`)
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── Google search terms ───────────────────────────────────────────────────────
+// ── Google search terms — 90d chunked ────────────────────────────────────────
 app.get('/api/google-search-terms', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','search_term','campaign_name','ad_group_name','cost','impressions','clicks','conversions','conversion_value'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
-    // Limit to 5000 rows to save memory
-    res.json({ ok: true, data: data.slice(0, 5000), count: data.length })
+    const fields  = ['date','search_term','campaign','ad_group_name','cost','impressions','clicks','conversions','conversion_value']
+    const account = `google_ads__858-197-3435`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.search_term || ''}__${r.campaign || ''}`)
+    // Cap at 10k rows to avoid memory issues
+    res.json({ ok: true, data: data.slice(0, 10000), count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── Google keywords ───────────────────────────────────────────────────────────
+// ── Google keywords — 90d chunked ────────────────────────────────────────────
 app.get('/api/google-keywords', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','keyword_text','keyword_match_type','campaign_name','ad_group_name','cost','impressions','clicks','conversions','conversion_value'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    const fields  = ['date','keyword_text','keyword_match_type','campaign_name','ad_group_name','cost','impressions','clicks','conversions','conversion_value']
+    const account = `google_ads__858-197-3435`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.keyword_text || ''}__${r.campaign_name || ''}`)
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── GA4 ───────────────────────────────────────────────────────────────────────
+// ── GA4 — 90d chunked ────────────────────────────────────────────────────────
 app.get('/api/ga4', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','campaign','session_manual_term','session_manual_ad_content','sessions','transactions','totalrevenue','source'],
-      `googleanalytics4__344633503`, req.query.preset || 'last_30d')
+    const fields  = ['date','campaign','session_manual_term','session_manual_ad_content','sessions','transactions','totalrevenue','source']
+    const account = `googleanalytics4__344633503`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign || ''}__${r.session_manual_term || ''}__${r.source || ''}`)
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── Google awareness ──────────────────────────────────────────────────────────
+// ── Google awareness — 90d chunked ───────────────────────────────────────────
 app.get('/api/google-awareness', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','campaign_name','ad_name','cost','impressions','clicks','video_views','vtr','cpv','average_cpm'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    const fields  = ['date','campaign_name','ad_name','cost','impressions','clicks','video_views','vtr','cpv','average_cpm']
+    const account = `google_ads__858-197-3435`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign_name || ''}__${r.ad_name || ''}`)
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── Google products ───────────────────────────────────────────────────────────
+// ── Google products — 90d chunked ────────────────────────────────────────────
 app.get('/api/google-products', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','campaign_name','product_title','cost','impressions','clicks','conversions','conversion_value'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
+    const fields  = ['date','campaign_name','product_title','cost','impressions','clicks','conversions','conversion_value']
+    const account = `google_ads__858-197-3435`
+    const data = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign_name || ''}__${r.product_title || ''}`)
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
-// ── Google demand gen ─────────────────────────────────────────────────────────
+// ── Google demand gen — 90d chunked ──────────────────────────────────────────
 app.get('/api/google-demandgen', async (req, res) => {
   try {
-    const data = await windsorFetch(
-      ['date','campaign_name','ad_name','cost','impressions','clicks','conversions','conversion_value','average_cpm','ctr'],
-      `google_ads__858-197-3435`, req.query.preset || 'last_30d')
-    const filtered = data.filter(r => {
+    const fields  = ['date','campaign_name','ad_name','cost','impressions','clicks','conversions','conversion_value','average_cpm','ctr']
+    const account = `google_ads__858-197-3435`
+    const allData = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.campaign_name || ''}__${r.ad_name || ''}`)
+    const filtered = allData.filter(r => {
       const name = (r.campaign_name || '').toLowerCase()
       return name.includes('demand') || name.includes('demandgen') || name.includes('demand_gen')
     })
@@ -151,32 +173,46 @@ app.get('/api/google-demandgen', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
+// ── Meta catalog — 90d chunked (P2) ──────────────────────────────────────────
+app.get('/api/meta-catalog', async (req, res) => {
+  try {
+    const fields  = ['date','campaign','adset_name','ad_name','spend','impressions','clicks','conversions','conversion_value']
+    const account = `facebook__584820145452956`
+    const allData = await windsorFetch90(fields, account,
+      r => `${r.date}__${r.ad_name || ''}__${r.adset_name || ''}`)
+    // Filter catalog campaigns
+    const filtered = allData.filter(r => {
+      const name = (r.campaign || r.adset_name || r.ad_name || '').toLowerCase()
+      return name.includes('catalog') || name.includes('dpa') || name.includes('dco')
+    })
+    res.json({ ok: true, data: filtered, count: filtered.length })
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
+})
+
 // ── Sync all ──────────────────────────────────────────────────────────────────
 app.get('/api/sync-all', async (req, res) => {
-  const preset = req.query.preset || 'last_30d'
   const results = {}, errors = {}
   const tasks = [
-    { key: 'meta',       path: `/api/meta-daily?preset=${preset}` },
-    { key: 'metaGa4',    path: `/api/meta-ga4?preset=${preset}` },
-    { key: 'ga4',        path: `/api/ga4?preset=${preset}` },
-    { key: 'google',     path: `/api/google-campaigns?preset=${preset}` },
-    { key: 'searchTerms',path: `/api/google-search-terms?preset=${preset}` },
-    { key: 'keywords',   path: `/api/google-keywords?preset=${preset}` },
-    { key: 'awareness',  path: `/api/google-awareness?preset=${preset}` },
-    { key: 'products',   path: `/api/google-products?preset=${preset}` },
-    { key: 'demandgen',  path: `/api/google-demandgen?preset=${preset}` },
+    { key: 'meta',        path: '/api/meta-daily' },
+    { key: 'metaGa4',    path: '/api/meta-ga4' },
+    { key: 'ga4',         path: '/api/ga4' },
+    { key: 'google',      path: '/api/google-campaigns' },
+    { key: 'searchTerms', path: '/api/google-search-terms' },
+    { key: 'keywords',    path: '/api/google-keywords' },
+    { key: 'awareness',   path: '/api/google-awareness' },
+    { key: 'products',    path: '/api/google-products' },
+    { key: 'demandgen',   path: '/api/google-demandgen' },
+    { key: 'catalog',     path: '/api/meta-catalog' },
   ]
-  // Run sequentially to avoid memory spike from parallel fetches
+  // Sequential to avoid memory spike
   for (const t of tasks) {
     try {
       const r = await fetch(`http://127.0.0.1:${PORT}${t.path}`)
       const j = await r.json()
       results[t.key] = { count: (j.data || []).length, ok: j.ok }
-    } catch (e) {
-      errors[t.key] = e.message
-    }
+    } catch (e) { errors[t.key] = e.message }
   }
-  res.json({ ok: true, results, errors, preset })
+  res.json({ ok: true, results, errors })
 })
 
 app.listen(PORT, () => console.log(`BlissClub proxy on port ${PORT}`))
