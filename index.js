@@ -279,4 +279,290 @@ app.get('/api/sync-all', async (req, res) => {
   res.json({ ok: true, results, errors })
 })
 
-app.listen(PORT, () => console.log('BlissClub proxy on port ' + PORT))
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BACKEND — Auth, Users, Data Cache, Activity, Filters, Annotations
+// All proxy routes above are UNCHANGED
+// ══════════════════════════════════════════════════════════════════════════════
+
+const bcrypt = require('bcryptjs')
+const jwt    = require('jsonwebtoken')
+const { Pool } = require('pg')
+const cron   = require('node-cron')
+
+const JWT_SECRET = process.env.JWT_SECRET || 'blissclub-secret-change-in-prod'
+
+// ── Database ──────────────────────────────────────────────────────────────────
+const pool = process.env.DATABASE_URL ? new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+}) : null
+
+// ── Auth middleware ────────────────────────────────────────────────────────────
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).json({ error: 'No token' })
+  try { req.user = jwt.verify(token, JWT_SECRET); next() }
+  catch (e) { res.status(401).json({ error: 'Invalid token' }) }
+}
+
+function adminOnly(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
+  next()
+}
+
+// ── DB Setup ──────────────────────────────────────────────────────────────────
+async function setupDB() {
+  if (!pool) { console.log('[DB] No DATABASE_URL — skipping DB setup'); return }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      email      TEXT UNIQUE NOT NULL,
+      password   TEXT NOT NULL,
+      role       TEXT NOT NULL DEFAULT 'media_buyer',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS sync_cache (
+      id         SERIAL PRIMARY KEY,
+      endpoint   TEXT UNIQUE NOT NULL,
+      data       JSONB NOT NULL,
+      row_count  INTEGER DEFAULT 0,
+      synced_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS user_activity (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      page       TEXT,
+      action     TEXT,
+      metadata   JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS saved_filters (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      page       TEXT NOT NULL,
+      filters    JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS annotations (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL,
+      entity_id   TEXT NOT NULL,
+      note        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+  console.log('[DB] Tables ready')
+  const { rows } = await pool.query('SELECT COUNT(*) FROM users')
+  if (rows[0].count === '0') {
+    const hash = await bcrypt.hash('blissclub2024', 10)
+    await pool.query(
+      'INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4)',
+      ['Admin', 'admin@blissclub.com', hash, 'admin']
+    )
+    console.log('[DB] Default admin: admin@blissclub.com / blissclub2024')
+  }
+}
+
+// ── Windsor sync to DB ────────────────────────────────────────────────────────
+const SYNC_ENDPOINTS = [
+  { key: 'meta_daily',          path: '/api/meta-daily' },
+  { key: 'meta_catalog',        path: '/api/meta-catalog' },
+  { key: 'ga4',                 path: '/api/ga4' },
+  { key: 'google_campaigns',    path: '/api/google-campaigns' },
+  { key: 'google_search_terms', path: '/api/google-search-terms' },
+  { key: 'google_keywords',     path: '/api/google-keywords' },
+  { key: 'google_awareness',    path: '/api/google-awareness' },
+  { key: 'google_products',     path: '/api/google-products' },
+  { key: 'google_demandgen',    path: '/api/google-demandgen' },
+]
+
+async function syncAndCache(endpoint) {
+  if (!pool) return
+  try {
+    const res  = await fetch('http://127.0.0.1:' + PORT + endpoint.path)
+    const json = await res.json()
+    const data = json.data || []
+    await pool.query(`
+      INSERT INTO sync_cache (endpoint, data, row_count, synced_at)
+      VALUES ($1,$2,$3,NOW())
+      ON CONFLICT (endpoint) DO UPDATE SET data=$2, row_count=$3, synced_at=NOW()
+    `, [endpoint.key, JSON.stringify(data), data.length])
+    console.log('[Cache]', endpoint.key, data.length, 'rows')
+  } catch (e) { console.error('[Cache]', endpoint.key, e.message) }
+}
+
+async function syncAllToCache() {
+  console.log('[Sync] Starting scheduled sync...')
+  for (const ep of SYNC_ENDPOINTS) await syncAndCache(ep)
+  console.log('[Sync] Done')
+}
+
+// Schedule every 6 hours
+cron.schedule('0 */6 * * *', syncAllToCache)
+
+// ── Auth routes ───────────────────────────────────────────────────────────────
+app.post('/auth/login', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DB not configured' })
+  const { email, password } = req.body
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
+  try {
+    const { rows } = await pool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()])
+    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
+    const user = rows[0]
+    if (!await bcrypt.compare(password, user.password)) return res.status(401).json({ error: 'Invalid credentials' })
+    const token = jwt.sign({ id:user.id, email:user.email, name:user.name, role:user.role }, JWT_SECRET, { expiresIn:'7d' })
+    await pool.query('INSERT INTO user_activity (user_id,page,action) VALUES ($1,$2,$3)', [user.id,'auth','login'])
+    res.json({ token, user:{ id:user.id, name:user.name, email:user.email, role:user.role } })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/auth/me', authMiddleware, async (req, res) => {
+  const { rows } = await pool.query('SELECT id,name,email,role,created_at FROM users WHERE id=$1', [req.user.id])
+  res.json(rows[0])
+})
+
+// ── User management ───────────────────────────────────────────────────────────
+app.get('/users', authMiddleware, adminOnly, async (req, res) => {
+  const { rows } = await pool.query('SELECT id,name,email,role,created_at FROM users ORDER BY created_at')
+  res.json(rows)
+})
+
+app.post('/users', authMiddleware, adminOnly, async (req, res) => {
+  const { name, email, password, role = 'media_buyer' } = req.body
+  if (!name||!email||!password) return res.status(400).json({ error: 'Name, email and password required' })
+  try {
+    const hash = await bcrypt.hash(password, 10)
+    const { rows } = await pool.query(
+      'INSERT INTO users (name,email,password,role) VALUES ($1,$2,$3,$4) RETURNING id,name,email,role',
+      [name, email.toLowerCase(), hash, role]
+    )
+    res.json(rows[0])
+  } catch (e) {
+    if (e.code==='23505') return res.status(400).json({ error: 'Email already exists' })
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.delete('/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  if (parseInt(req.params.id)===req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' })
+  await pool.query('DELETE FROM users WHERE id=$1', [req.params.id])
+  res.json({ ok: true })
+})
+
+app.patch('/users/:id/password', authMiddleware, async (req, res) => {
+  if (req.user.role!=='admin' && parseInt(req.params.id)!==req.user.id) return res.status(403).json({ error: 'Forbidden' })
+  const { password } = req.body
+  if (!password||password.length<6) return res.status(400).json({ error: 'Password must be 6+ chars' })
+  const hash = await bcrypt.hash(password, 10)
+  await pool.query('UPDATE users SET password=$1 WHERE id=$2', [hash, req.params.id])
+  res.json({ ok: true })
+})
+
+// ── Cached data routes (used by dashboard instead of direct Windsor calls) ────
+app.get('/data/:endpoint', authMiddleware, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DB not configured' })
+  const { rows } = await pool.query(
+    'SELECT data,row_count,synced_at FROM sync_cache WHERE endpoint=$1',
+    [req.params.endpoint]
+  )
+  if (!rows.length) return res.json({ data:[], synced_at:null, row_count:0 })
+  res.json({ data:rows[0].data, synced_at:rows[0].synced_at, row_count:rows[0].row_count })
+})
+
+app.get('/data', authMiddleware, async (req, res) => {
+  const { rows } = await pool.query('SELECT endpoint,row_count,synced_at FROM sync_cache ORDER BY endpoint')
+  res.json(rows)
+})
+
+// ── Manual sync trigger ───────────────────────────────────────────────────────
+app.post('/sync', authMiddleware, adminOnly, async (req, res) => {
+  res.json({ ok:true, message:'Sync started in background' })
+  syncAllToCache()
+})
+
+// ── Activity logging ──────────────────────────────────────────────────────────
+app.post('/activity', authMiddleware, async (req, res) => {
+  if (!pool) return res.json({ ok: true })
+  const { page, action, metadata } = req.body
+  await pool.query(
+    'INSERT INTO user_activity (user_id,page,action,metadata) VALUES ($1,$2,$3,$4)',
+    [req.user.id, page, action, JSON.stringify(metadata||{})]
+  )
+  res.json({ ok: true })
+})
+
+app.get('/activity', authMiddleware, adminOnly, async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT a.id,u.name,u.email,a.page,a.action,a.metadata,a.created_at
+    FROM user_activity a JOIN users u ON u.id=a.user_id
+    ORDER BY a.created_at DESC LIMIT 200
+  `)
+  res.json(rows)
+})
+
+// ── Saved filters ─────────────────────────────────────────────────────────────
+app.get('/filters', authMiddleware, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT * FROM saved_filters WHERE user_id=$1 ORDER BY created_at DESC', [req.user.id])
+  res.json(rows)
+})
+
+app.post('/filters', authMiddleware, async (req, res) => {
+  const { name, page, filters } = req.body
+  const { rows } = await pool.query(
+    'INSERT INTO saved_filters (user_id,name,page,filters) VALUES ($1,$2,$3,$4) RETURNING *',
+    [req.user.id, name, page, JSON.stringify(filters)]
+  )
+  res.json(rows[0])
+})
+
+app.delete('/filters/:id', authMiddleware, async (req, res) => {
+  await pool.query('DELETE FROM saved_filters WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id])
+  res.json({ ok: true })
+})
+
+// ── Annotations ───────────────────────────────────────────────────────────────
+app.get('/annotations/:type/:id', authMiddleware, async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT a.*,u.name as author FROM annotations a
+    JOIN users u ON u.id=a.user_id
+    WHERE a.entity_type=$1 AND a.entity_id=$2
+    ORDER BY a.created_at DESC
+  `, [req.params.type, req.params.id])
+  res.json(rows)
+})
+
+app.post('/annotations', authMiddleware, async (req, res) => {
+  const { entity_type, entity_id, note } = req.body
+  const { rows } = await pool.query(
+    'INSERT INTO annotations (user_id,entity_type,entity_id,note) VALUES ($1,$2,$3,$4) RETURNING *',
+    [req.user.id, entity_type, entity_id, note]
+  )
+  res.json(rows[0])
+})
+
+app.delete('/annotations/:id', authMiddleware, async (req, res) => {
+  await pool.query('DELETE FROM annotations WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id])
+  res.json({ ok: true })
+})
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+setupDB().then(() => {
+  app.listen(PORT, () => {
+    console.log('BlissClub proxy+backend on port ' + PORT)
+    // Initial cache fill if empty
+    if (pool) {
+      pool.query('SELECT COUNT(*) FROM sync_cache').then(({ rows }) => {
+        if (rows[0].count === '0') {
+          console.log('[Startup] Cache empty — running initial sync in 30s...')
+          setTimeout(syncAllToCache, 30000)
+        }
+      }).catch(() => {})
+    }
+  })
+})
