@@ -97,15 +97,16 @@ app.get('/api/meta-daily', async (req, res) => {
     ]
     const metaData = await windsorFetch30(metaFields, 'facebook', META_ACCOUNT,
       r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || ''))
-    const now = new Date(), day = 24*60*60*1000
-    const from30 = fmt(new Date(now - 29*day)), to30 = fmt(now)
-    const ga4Raw   = await windsorFetchGA4(ga4Fields, GA4_ACCOUNT, from30, to30)
-    // Keep only paid Meta sessions (source = ig, facebook, cpc, paid, social)
+    const ga4Raw   = await windsorFetch30(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.session_manual_ad_content || '') + '__' + (r.campaign || ''))
+    // Keep only paid Meta sessions with real revenue
+    const PAID_SOURCES = new Set(['ig','fb','facebook','paid','cpc','social'])
     const ga4Data  = ga4Raw.filter(r =>
+      r.totalrevenue > 0 &&
       r.session_manual_ad_content &&
       r.session_manual_ad_content !== '(not set)' &&
       r.session_manual_ad_content !== 'sag_organic' &&
-      ['ig','facebook','cpc','paid','social'].includes((r.source || '').toLowerCase())
+      PAID_SOURCES.has((r.source || '').toLowerCase())
     )
     console.log('[meta-daily] meta:', metaData.length, 'ga4 raw:', ga4Raw.length, 'ga4 filtered:', ga4Data.length)
     const data = [...metaData, ...ga4Data]
@@ -136,9 +137,9 @@ app.get('/api/meta-catalog', async (req, res) => {
 
 app.get('/api/ga4', async (req, res) => {
   try {
-    const fields = ['date','campaign','source','medium','sessions','totalrevenue','transactions']
+    const fields = ['date','campaign','session_manual_ad_content','source','medium','sessions','totalrevenue','transactions']
     const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
-      r => r.date + '__' + (r.campaign || '') + '__' + (r.source || ''))
+      r => r.date + '__' + (r.campaign || '') + '__' + (r.session_manual_ad_content || '') + '__' + (r.source || ''))
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
