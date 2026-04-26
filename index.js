@@ -21,12 +21,11 @@ function fmt(d) {
   return d.toISOString().split('T')[0]
 }
 
-function chunks60() {
+function chunks30() {
   const now = new Date()
   const day = 24 * 60 * 60 * 1000
   return [
     { from: fmt(new Date(now - 29 * day)), to: fmt(now) },
-    { from: fmt(new Date(now - 59 * day)), to: fmt(new Date(now - 30 * day)) },
   ]
 }
 
@@ -50,7 +49,7 @@ async function windsorFetch(fields, connector, account, from, to) {
 }
 
 // Sequential 60-day fetch — frees memory between chunks
-async function windsorFetch60(fields, connector, account, dedupeKey) {
+async function windsorFetch30(fields, connector, account, dedupeKey) {
   const parts = chunks60()
   const seen  = new Map()
   for (const { from, to } of parts) {
@@ -67,9 +66,22 @@ async function windsorFetch60(fields, connector, account, dedupeKey) {
 
 app.get('/api/meta-daily', async (req, res) => {
   try {
-    const fields = ['date','campaign','adset_name','ad_name','spend','impressions','clicks']
-    const data   = await windsorFetch60(fields, 'facebook', META_ACCOUNT,
-      r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || ''))
+    const metaFields = [
+      'date','campaign','adset_name','ad_name',
+      'spend','impressions','clicks','datasource',
+      'purchase_roas_omni_purchase','actions_omni_purchase',
+      'action_values_omni_purchase',
+    ]
+    const ga4Fields = [
+      'date','campaign','session_manual_term','session_manual_ad_content',
+      'sessions','totalrevenue','transactions','datasource','source',
+    ]
+    // Sequential: Meta first, then GA4 — blended into one response
+    const metaData = await windsorFetch30(metaFields, 'facebook', META_ACCOUNT,
+      r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || '') + '__meta')
+    const ga4Data  = await windsorFetch30(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.campaign || '') + '__' + (r.session_manual_ad_content || '') + '__ga4')
+    const data = [...metaData, ...ga4Data]
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
@@ -82,7 +94,7 @@ app.get('/api/meta-catalog', async (req, res) => {
       'actions_purchase','action_values_purchase',
       'actions_add_to_cart','actions_view_content',
     ]
-    const all = await windsorFetch60(fields, 'facebook', META_ACCOUNT,
+    const all = await windsorFetch30(fields, 'facebook', META_ACCOUNT,
       r => r.date + '__' + (r.product_id || '') + '__' + (r.campaign || ''))
     const data = all.filter(r => {
       const c = (r.campaign || '').toLowerCase()
@@ -97,7 +109,7 @@ app.get('/api/meta-catalog', async (req, res) => {
 app.get('/api/ga4', async (req, res) => {
   try {
     const fields = ['date','campaign','source','medium','sessions','totalrevenue','transactions']
-    const data   = await windsorFetch60(fields, 'googleanalytics4', GA4_ACCOUNT,
+    const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
       r => r.date + '__' + (r.campaign || '') + '__' + (r.source || ''))
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
@@ -105,13 +117,19 @@ app.get('/api/ga4', async (req, res) => {
 
 app.get('/api/meta-ga4', async (req, res) => {
   try {
-    const metaFields = ['date','campaign','adset_name','ad_name','spend','impressions','clicks']
-    const ga4Fields  = ['date','campaign','source','medium','sessions','totalrevenue','transactions']
-    // Strictly sequential — Meta fully done before GA4 starts
-    const metaData = await windsorFetch60(metaFields, 'facebook', META_ACCOUNT,
+    const metaFields = [
+      'date','campaign','adset_name','ad_name',
+      'spend','impressions','clicks','datasource',
+      'purchase_roas_omni_purchase','actions_omni_purchase',
+    ]
+    const ga4Fields = [
+      'date','campaign','session_manual_term','session_manual_ad_content',
+      'sessions','totalrevenue','transactions','datasource','source',
+    ]
+    const metaData = await windsorFetch30(metaFields, 'facebook', META_ACCOUNT,
       r => r.date + '__' + (r.ad_name || '') + '__meta')
-    const ga4Data  = await windsorFetch60(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
-      r => r.date + '__' + (r.campaign || '') + '__ga4')
+    const ga4Data  = await windsorFetch30(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.campaign || '') + '__' + (r.session_manual_ad_content || '') + '__ga4')
     const data = [...metaData, ...ga4Data]
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
@@ -122,7 +140,7 @@ app.get('/api/meta-ga4', async (req, res) => {
 app.get('/api/google-campaigns', async (req, res) => {
   try {
     const fields = ['date','campaign','impressions','clicks','spend','conversions','conversion_value']
-    const data   = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
+    const data   = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || ''))
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
@@ -131,7 +149,7 @@ app.get('/api/google-campaigns', async (req, res) => {
 app.get('/api/google-search-terms', async (req, res) => {
   try {
     const fields = ['date','campaign','ad_group_name','search_term','impressions','clicks','spend','conversions']
-    const data   = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
+    const data   = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.search_term || '') + '__' + (r.campaign || ''))
     const capped = data.slice(0, 5000)
     res.json({ ok: true, data: capped, count: capped.length })
@@ -140,9 +158,9 @@ app.get('/api/google-search-terms', async (req, res) => {
 
 app.get('/api/google-keywords', async (req, res) => {
   try {
-    const fields = ['date','campaign','ad_group_name','keyword','match_type','impressions','clicks','spend','conversions']
-    const data   = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
-      r => r.date + '__' + (r.keyword || '') + '__' + (r.campaign || ''))
+    const fields = ['date','campaign','ad_group_name','keyword_text','keyword','match_type','impressions','clicks','spend','conversions']
+    const data   = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
+      r => r.date + '__' + (r.keyword_text || r.keyword || '') + '__' + (r.campaign || ''))
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
@@ -150,7 +168,7 @@ app.get('/api/google-keywords', async (req, res) => {
 app.get('/api/google-awareness', async (req, res) => {
   try {
     const fields = ['date','campaign','impressions','clicks','spend','conversions','conversion_value']
-    const all    = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
+    const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || ''))
     const data   = all.filter(r => {
       const c = (r.campaign || '').toLowerCase()
@@ -163,7 +181,7 @@ app.get('/api/google-awareness', async (req, res) => {
 app.get('/api/google-products', async (req, res) => {
   try {
     const fields = ['date','campaign','ad_group_name','impressions','clicks','spend','conversions','conversion_value']
-    const all    = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
+    const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || '') + '__' + (r.ad_group_name || ''))
     const data   = all.filter(r => {
       const c = (r.campaign || '').toLowerCase()
@@ -175,8 +193,8 @@ app.get('/api/google-products', async (req, res) => {
 
 app.get('/api/google-demandgen', async (req, res) => {
   try {
-    const fields = ['date','campaign','ad_group_name','impressions','clicks','spend','conversions','conversion_value']
-    const all    = await windsorFetch60(fields, 'google_ads', GADS_ACCOUNT,
+    const fields = ['date','campaign','ad_group_name','ad_name','impressions','clicks','spend','conversions','conversion_value']
+    const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || '') + '__' + (r.ad_group_name || ''))
     const data   = all.filter(r => {
       const c = (r.campaign || '').toLowerCase()
@@ -192,7 +210,7 @@ app.get('/api/google-demandgen', async (req, res) => {
 app.get('/api/ga4-items', async (req, res) => {
   try {
     const fields = ['date','item_id','item_name','item_revenue','item_views','item_quantity']
-    const data   = await windsorFetch60(fields, 'googleanalytics4', GA4_ACCOUNT,
+    const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
       r => (r.item_id || '') + '__' + (r.date || ''))
     const enriched = data.map(r => ({
       ...r,
@@ -209,7 +227,6 @@ app.get('/api/sync-all', async (req, res) => {
   const tasks   = [
     { key: 'meta',        path: '/api/meta-daily' },
     { key: 'catalog',     path: '/api/meta-catalog' },
-    { key: 'ga4Items',   path: '/api/ga4-items' },
     { key: 'ga4',         path: '/api/ga4' },
     { key: 'metaGa4',    path: '/api/meta-ga4' },
     { key: 'google',      path: '/api/google-campaigns' },
