@@ -252,6 +252,16 @@ app.get('/api/ga4-items', async (req, res) => {
 })
 
 // ── Sync-all: all endpoints sequentially ─────────────────────────────────────
+app.get('/api/ga4-items', async (req, res) => {
+  try {
+    const fields = ['date','item_category','item_name','item_revenue','items_purchased','gross_item_revenue']
+    const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.item_name || '') + '__' + (r.item_category || ''))
+    const filtered = data.filter(r => r.item_name && (r.item_revenue > 0 || r.items_purchased > 0))
+    res.json({ ok: true, data: filtered, count: filtered.length })
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
+})
+
 app.get('/api/sync-all', async (req, res) => {
   const results = {}
   const errors  = {}
@@ -379,6 +389,7 @@ const SYNC_ENDPOINTS = [
   { key: 'google_awareness',    path: '/api/google-awareness' },
   { key: 'google_products',     path: '/api/google-products' },
   { key: 'google_demandgen',    path: '/api/google-demandgen' },
+  { key: 'ga4_items',            path: '/api/ga4-items' },
 ]
 
 async function syncAndCache(endpoint) {
