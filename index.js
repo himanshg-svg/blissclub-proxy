@@ -209,18 +209,11 @@ app.get('/api/google-awareness', async (req, res) => {
 
 app.get('/api/google-products', async (req, res) => {
   try {
-    const fields = ['date','campaign','ad_group_name','product_title','impressions','clicks','spend','conversions','conversion_value']
+    const fields = ['date','campaign','product_title','impressions','clicks','spend','conversions','conversion_value']
     const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
-      r => r.date + '__' + (r.campaign || '') + '__' + (r.product_title || r.ad_group_name || ''))
-    const data   = all
-      .filter(r => {
-        const c = (r.campaign || '').toLowerCase()
-        return c.includes('shopping') || c.includes('pmax') || c.includes('product')
-      })
-      .map(r => ({
-        ...r,
-        product_title: (r.product_title || r.ad_group_name || '').replace(/^\|+\s*/, '').replace(/\s*\|+$/, '').trim()
-      }))
+      r => r.date + '__' + (r.campaign || '') + '__' + (r.product_title || ''))
+    // Only rows with actual product_title (filters out Standard Shopping ad group rows)
+    const data   = all.filter(r => r.product_title && r.product_title.trim() !== '')
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
