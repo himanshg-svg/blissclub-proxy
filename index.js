@@ -180,7 +180,7 @@ app.get('/api/google-awareness', async (req, res) => {
 
 app.get('/api/google-products', async (req, res) => {
   try {
-    const fields = ['date','campaign','ad_group_name','ad_name','impressions','clicks','spend','conversions','conversion_value']
+    const fields = ['date','campaign','ad_group_name','product_title','impressions','clicks','spend','conversions','conversion_value']
     const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || '') + '__' + (r.ad_group_name || ''))
     const data   = all.filter(r => {
