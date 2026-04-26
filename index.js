@@ -50,7 +50,7 @@ async function windsorFetch(fields, connector, account, from, to) {
 
 // Sequential 60-day fetch — frees memory between chunks
 async function windsorFetch30(fields, connector, account, dedupeKey) {
-  const parts = chunks60()
+  const parts = chunks30()
   const seen  = new Map()
   for (const { from, to } of parts) {
     const rows = await windsorFetch(fields, connector, account, from, to)
