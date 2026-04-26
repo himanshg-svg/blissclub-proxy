@@ -76,12 +76,17 @@ app.get('/api/meta-daily', async (req, res) => {
 
 app.get('/api/meta-catalog', async (req, res) => {
   try {
-    const fields = ['date','campaign','adset_name','ad_name','spend','impressions','clicks']
-    const all    = await windsorFetch60(fields, 'facebook', META_ACCOUNT,
-      r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || ''))
-    const data   = all.filter(r => {
-      const n = (r.campaign || r.adset_name || r.ad_name || '').toLowerCase()
-      return n.includes('catalog') || n.includes('dpa') || n.includes('dco')
+    const fields = [
+      'date','campaign','adset_name','product_id',
+      'spend','impressions','clicks',
+      'actions_purchase','action_values_purchase',
+      'actions_add_to_cart','actions_view_content',
+    ]
+    const all = await windsorFetch60(fields, 'facebook', META_ACCOUNT,
+      r => r.date + '__' + (r.product_id || '') + '__' + (r.campaign || ''))
+    const data = all.filter(r => {
+      const c = (r.campaign || '').toLowerCase()
+      return c.includes('catalog') || c.includes('dpa')
     })
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
