@@ -10,15 +10,14 @@ app.use(cors())
 app.options('*', cors())
 app.use(express.json())
 
-const PRESETS = ['last_7d', 'last_14d', 'last_28d', 'last_60d', 'last_90d']
-
-// ── Base Windsor fetch ────────────────────────────────────────────────────────
-async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
+// ── Windsor fetch with date_from/date_to for flexible ranges ─────────────────
+async function windsorFetch(fields, accounts, dateFrom, dateTo) {
   if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
   const params = new URLSearchParams({
-    api_key:     APIKEY,
-    date_preset: datePreset,
-    fields:      fields.join(','),
+    api_key:   APIKEY,
+    date_from: dateFrom,
+    date_to:   dateTo,
+    fields:    fields.join(','),
   })
   if (accounts) params.set('select_accounts', accounts)
   const url = `https://connectors.windsor.ai/all?${params}`
@@ -38,26 +37,33 @@ async function windsorFetch(fields, accounts, datePreset = 'last_30d') {
   } catch (e) { clearTimeout(timer); throw e }
 }
 
-// ── Chunked 90-day fetch — fires all presets in parallel, dedupes by key ─────
-async function windsorFetch90(fields, accounts, dedupeKey) {
-  const chunks = await Promise.allSettled(
-    PRESETS.map(p => windsorFetch(fields, accounts, p))
+// ── Date helpers ──────────────────────────────────────────────────────────────
+function fmtDate(d) { return d.toISOString().split('T')[0] }
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d }
+
+// ── Chunked fetch — splits 180 days into 3x60 day chunks in parallel ──────────
+async function windsorFetch180(fields, accounts, dedupeKey) {
+  const today = new Date()
+  const chunks = [
+    { from: fmtDate(daysAgo(179)), to: fmtDate(daysAgo(120)) },
+    { from: fmtDate(daysAgo(119)), to: fmtDate(daysAgo(60))  },
+    { from: fmtDate(daysAgo(59)),  to: fmtDate(today)         },
+  ]
+  const results = await Promise.allSettled(
+    chunks.map(c => windsorFetch(fields, accounts, c.from, c.to))
   )
   const allRows = []
-  for (const chunk of chunks) {
-    if (chunk.status === 'fulfilled' && Array.isArray(chunk.value)) {
-      allRows.push(...chunk.value)
-    }
+  for (const r of results) {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) allRows.push(...r.value)
   }
   if (!dedupeKey) return allRows
-  // Deduplicate by composite key
   const seen = new Map()
-  for (const row of allRows) {
-    const key = dedupeKey(row)
-    seen.set(key, row)
-  }
+  for (const row of allRows) seen.set(dedupeKey(row), row)
   return Array.from(seen.values())
 }
+
+// Keep alias for backward compat
+const windsorFetch90 = windsorFetch180
 
 app.get('/',     (req, res) => res.json({ ok: true, service: 'blissclub-proxy', ts: Date.now() }))
 app.get('/ping', (req, res) => res.json({ pong: true, ts: Date.now() }))
