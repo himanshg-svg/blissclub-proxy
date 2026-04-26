@@ -48,7 +48,27 @@ async function windsorFetch(fields, connector, account, from, to) {
   return rows
 }
 
-// Sequential 60-day fetch — frees memory between chunks
+// GA4-specific fetch using /all endpoint (connector URL doesn't work for GA4)
+async function windsorFetchGA4(fields, account, from, to) {
+  if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
+  const params = new URLSearchParams({
+    api_key:   APIKEY,
+    date_from: from,
+    date_to:   to,
+    fields:    fields.join(','),
+    connector: 'googleanalytics4',
+    accounts:  account,
+  })
+  const url = 'https://connectors.windsor.ai/all?' + params.toString()
+  console.log('[GA4] fetching', from, '->', to)
+  const res  = await fetch(url)
+  const json = await res.json()
+  const rows = Array.isArray(json) ? json : (json.data || [])
+  console.log('[GA4] got', rows.length, 'rows')
+  return rows
+}
+
+// Sequential 30-day fetch — frees memory between chunks
 async function windsorFetch30(fields, connector, account, dedupeKey) {
   const parts = chunks30()
   const seen  = new Map()
@@ -77,8 +97,9 @@ app.get('/api/meta-daily', async (req, res) => {
     ]
     const metaData = await windsorFetch30(metaFields, 'facebook', META_ACCOUNT,
       r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || ''))
-    const ga4Raw   = await windsorFetch30(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
-      r => r.date + '__' + (r.session_manual_ad_content || '') + '__' + (r.campaign || ''))
+    const now = new Date(), day = 24*60*60*1000
+    const from30 = fmt(new Date(now - 29*day)), to30 = fmt(now)
+    const ga4Raw   = await windsorFetchGA4(ga4Fields, GA4_ACCOUNT, from30, to30)
     // Keep only paid Meta sessions (source = ig, facebook, cpc, paid, social)
     const ga4Data  = ga4Raw.filter(r =>
       r.session_manual_ad_content &&
