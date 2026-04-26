@@ -212,8 +212,12 @@ app.get('/api/google-products', async (req, res) => {
     const fields = ['date','campaign','product_title','impressions','clicks','spend','conversions','conversion_value']
     const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
       r => r.date + '__' + (r.campaign || '') + '__' + (r.product_title || ''))
-    // Only rows with actual product_title (filters out Standard Shopping ad group rows)
-    const data   = all.filter(r => r.product_title && r.product_title.trim() !== '')
+    // Only rows with real product titles — filter out pure-pipe or near-empty titles
+    const data   = all.filter(r => {
+      if (!r.product_title) return false
+      const cleaned = (r.product_title || '').replace(/[|\s]/g, '')
+      return cleaned.length > 3
+    })
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
