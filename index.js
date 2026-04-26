@@ -66,12 +66,6 @@ async function windsorFetch30(fields, connector, account, dedupeKey) {
 
 app.get('/api/meta-daily', async (req, res) => {
   try {
-    // Use Windsor /all endpoint — blends Meta + GA4 in one call (same as Windsor dashboard)
-    const now = new Date()
-    const day = 24 * 60 * 60 * 1000
-    const from = fmt(new Date(now - 29 * day))
-    const to   = fmt(now)
-
     const metaFields = [
       'date','campaign','adset_name','ad_name',
       'spend','impressions','clicks','datasource',
@@ -81,33 +75,17 @@ app.get('/api/meta-daily', async (req, res) => {
       'date','campaign','session_manual_ad_content','session_manual_term',
       'sessions','totalrevenue','transactions','datasource','source',
     ]
-
-    // Fetch Meta via facebook connector
-    const metaParams = new URLSearchParams({
-      api_key: APIKEY, date_from: from, date_to: to,
-      fields: metaFields.join(','), connector: 'facebook', accounts: META_ACCOUNT, limit: '50000'
-    })
-    const metaRes  = await fetch('https://connectors.windsor.ai/all?' + metaParams)
-    const metaJson = await metaRes.json()
-    const metaData = Array.isArray(metaJson) ? metaJson : (metaJson.data || [])
-
-    // Fetch GA4 via /all endpoint (same as Windsor dashboard uses)
-    const ga4Params = new URLSearchParams({
-      api_key: APIKEY, date_from: from, date_to: to,
-      fields: ga4Fields.join(','), connector: 'googleanalytics4', accounts: GA4_ACCOUNT, limit: '50000'
-    })
-    const ga4Res  = await fetch('https://connectors.windsor.ai/all?' + ga4Params)
-    const ga4Json = await ga4Res.json()
-    const ga4Raw  = Array.isArray(ga4Json) ? ga4Json : (ga4Json.data || [])
-
-    // Filter GA4 to only paid/social sessions with real revenue
-    const ga4Data = ga4Raw.filter(r =>
+    const metaData = await windsorFetch30(metaFields, 'facebook', META_ACCOUNT,
+      r => r.date + '__' + (r.ad_name || '') + '__' + (r.adset_name || ''))
+    const ga4Raw   = await windsorFetch30(ga4Fields, 'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.session_manual_ad_content || '') + '__' + (r.campaign || ''))
+    // Keep only paid Meta sessions (source = ig, facebook, cpc, paid, social)
+    const ga4Data  = ga4Raw.filter(r =>
       r.session_manual_ad_content &&
       r.session_manual_ad_content !== '(not set)' &&
       r.session_manual_ad_content !== 'sag_organic' &&
       ['ig','facebook','cpc','paid','social'].includes((r.source || '').toLowerCase())
     )
-
     console.log('[meta-daily] meta:', metaData.length, 'ga4 raw:', ga4Raw.length, 'ga4 filtered:', ga4Data.length)
     const data = [...metaData, ...ga4Data]
     res.json({ ok: true, data, count: data.length, meta: metaData.length, ga4: ga4Data.length })
@@ -211,11 +189,16 @@ app.get('/api/google-products', async (req, res) => {
   try {
     const fields = ['date','campaign','ad_group_name','product_title','impressions','clicks','spend','conversions','conversion_value']
     const all    = await windsorFetch30(fields, 'google_ads', GADS_ACCOUNT,
-      r => r.date + '__' + (r.campaign || '') + '__' + (r.ad_group_name || ''))
-    const data   = all.filter(r => {
-      const c = (r.campaign || '').toLowerCase()
-      return c.includes('shopping') || c.includes('pmax') || c.includes('product')
-    })
+      r => r.date + '__' + (r.campaign || '') + '__' + (r.product_title || r.ad_group_name || ''))
+    const data   = all
+      .filter(r => {
+        const c = (r.campaign || '').toLowerCase()
+        return c.includes('shopping') || c.includes('pmax') || c.includes('product')
+      })
+      .map(r => ({
+        ...r,
+        product_title: (r.product_title || r.ad_group_name || '').replace(/^\|+\s*/, '').replace(/\s*\|+$/, '').trim()
+      }))
     res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
