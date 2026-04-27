@@ -254,11 +254,20 @@ app.get('/api/ga4-items', async (req, res) => {
 // ── Sync-all: all endpoints sequentially ─────────────────────────────────────
 app.get('/api/ga4-items', async (req, res) => {
   try {
-    const fields = ['date','item_category','item_name','item_revenue','items_purchased','gross_item_revenue']
-    const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
-      r => r.date + '__' + (r.item_name || '') + '__' + (r.item_category || ''))
-    const filtered = data.filter(r => r.item_name && (r.item_revenue > 0 || r.items_purchased > 0))
-    res.json({ ok: true, data: filtered, count: filtered.length })
+    if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
+    const now = new Date(), day = 24*60*60*1000
+    const from = fmt(new Date(now - 29*day)), to = fmt(now)
+    // Use /all endpoint with connector param — item fields need this endpoint
+    const params = new URLSearchParams({
+      api_key: APIKEY, date_from: from, date_to: to,
+      fields: 'date,item_name,item_category,item_revenue,items_purchased,gross_item_revenue',
+      connector: 'googleanalytics4', accounts: GA4_ACCOUNT, limit: '50000'
+    })
+    const res2 = await fetch('https://connectors.windsor.ai/all?' + params)
+    const json = await res2.json()
+    const raw  = Array.isArray(json) ? json : (json.data || [])
+    const data = raw.filter(r => r.item_name && (Number(r.item_revenue||0) > 0 || Number(r.items_purchased||0) > 0))
+    res.json({ ok: true, data, count: data.length })
   } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
 })
 
