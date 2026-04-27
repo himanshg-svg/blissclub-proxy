@@ -238,31 +238,21 @@ app.get('/api/google-demandgen', async (req, res) => {
 // ── GA4 item-level endpoint ───────────────────────────────────────────────────
 // item_id format: shopify_IN_{product_id}_{variant_id}
 // variant_id (last segment after final _) matches Meta product_id number
-app.get('/api/ga4-items', async (req, res) => {
-  try {
-    const fields = ['date','item_id','item_name','item_revenue','item_views','item_quantity']
-    const data   = await windsorFetch30(fields, 'googleanalytics4', GA4_ACCOUNT,
-      r => (r.item_id || '') + '__' + (r.date || ''))
-    const enriched = data.map(r => ({
-      ...r,
-      variant_id: r.item_id ? r.item_id.split('_').pop() : null,
-    }))
-    res.json({ ok: true, data: enriched, count: enriched.length })
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
-})
-
 // ── Sync-all: all endpoints sequentially ─────────────────────────────────────
 app.get('/api/ga4-items', async (req, res) => {
   try {
     if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
-    const now = new Date(), day = 24*60*60*1000
-    const from = fmt(new Date(now - 29*day)), to = fmt(now)
-    const data = await windsorFetch30(
-      ['date','item_name','item_category','item_revenue','items_purchased'],
-      'googleanalytics4', GA4_ACCOUNT,
-      r => r.date + '__' + (r.item_name||'') + '__' + (r.item_category||'')
-    )
-    const filtered = data.filter(r => r.item_name && Number(r.item_revenue||0) > 0)
+    const params = new URLSearchParams({
+      api_key:     APIKEY,
+      date_preset: 'last_30d',
+      fields:      'date,item_name,item_revenue,items_purchased',
+      accounts:    GA4_ACCOUNT,
+    })
+    const url  = `https://connectors.windsor.ai/googleanalytics4?${params}`
+    const resp = await fetch(url)
+    const json = await resp.json()
+    const rows = Array.isArray(json) ? json : (json.data || [])
+    const filtered = rows.filter(r => r.item_name && Number(r.item_revenue||0) > 0)
     res.json({ ok: true, data: filtered, count: filtered.length })
   } catch (e) {
     console.error('[ga4-items] error:', e.message)
