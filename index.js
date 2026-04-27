@@ -255,21 +255,15 @@ app.get('/api/ga4-items', async (req, res) => {
 app.get('/api/ga4-items', async (req, res) => {
   try {
     if (!APIKEY) throw new Error('WINDSOR_API_KEY not set')
-    // Use same URL format as Windsor dashboard — date_preset + connector-specific URL
-    const params = new URLSearchParams({
-      api_key:     APIKEY,
-      date_preset: 'last_30d',
-      fields:      'date,item_name,item_category,item_revenue,items_purchased',
-      accounts:    GA4_ACCOUNT,
-    })
-    const url  = 'https://connectors.windsor.ai/googleanalytics4?' + params.toString()
-    console.log('[ga4-items] fetching:', url.replace(APIKEY, '***'))
-    const res2 = await fetch(url)
-    const json = await res2.json()
-    const raw  = Array.isArray(json) ? json : (json.data || [])
-    console.log('[ga4-items] raw rows:', raw.length, raw[0] ? JSON.stringify(raw[0]).slice(0,100) : 'empty')
-    const data = raw.filter(r => r.item_name && Number(r.item_revenue||0) > 0)
-    res.json({ ok: true, data, count: data.length })
+    const now = new Date(), day = 24*60*60*1000
+    const from = fmt(new Date(now - 29*day)), to = fmt(now)
+    const data = await windsorFetch30(
+      ['date','item_name','item_category','item_revenue','items_purchased'],
+      'googleanalytics4', GA4_ACCOUNT,
+      r => r.date + '__' + (r.item_name||'') + '__' + (r.item_category||'')
+    )
+    const filtered = data.filter(r => r.item_name && Number(r.item_revenue||0) > 0)
+    res.json({ ok: true, data: filtered, count: filtered.length })
   } catch (e) {
     console.error('[ga4-items] error:', e.message)
     res.status(500).json({ ok: false, error: e.message })
